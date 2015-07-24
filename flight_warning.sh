@@ -3,6 +3,7 @@
 # Primary bash script for flight_warning system.
 #
 # Intended to invoke flight_warning.py python mainline from 'dump1090' feed.
+# Assumes default (i.e. non-metric units) are being generated (as per PiAware default configuration).
 # Some logging of intercepted/translated ADS-B records are sent/appended to standard output.
 # Reason for logging to '/tmp' file system is to avoid SD card corruption on Raspberry Pi.
 
