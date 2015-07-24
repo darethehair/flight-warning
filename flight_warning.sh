@@ -1,16 +1,9 @@
 #!/bin/bash
 #
-# Parent bash script for flight_warning system.
+# Primary bash script for flight_warning system.
 #
-# Intended to automatically restart the main bash/python scripts if they crash for whatever reason.
-# Can be made to automatically start during reboot by adding to crontab schedule e.g
-# 
-#	@reboot /usr/local/bin/flight_warning_parent.sh
-#
+# Intended to invoke flight_warning.py python mainline from 'dump1090' feed.
+# Some logging of intercepted/translated ADS-B records are sent/appended to standard output.
+# Reason for logging to '/tmp' file system is to avoid SD card corruption on Raspberry Pi.
 
-logger -t $0 "starting flight_warning.sh..."
-until /usr/local/bin/flight_warning.sh; do
-	logger -t $0 "flight_warning.sh crashed so restarting it..."
-    	sleep 1
-done
-
+nc localhost 30003 | python /usr/local/bin/flight_warning.py >> /tmp/flight_warning.out
