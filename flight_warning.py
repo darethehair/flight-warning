@@ -64,7 +64,7 @@ metric_units = True
 # 
 # set desired distance and time limits
 #
-limit_distance = 10
+limit_distance = yourdetectionradius
 limit_duplicate_minutes = 60
 
 #
