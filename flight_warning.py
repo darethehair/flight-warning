@@ -3,11 +3,13 @@
 
 """
 flight_warning.py
-version 1.04
+version 1.05
 
 This program will send a Google mail message when an ADS-B data feed from
 a dump1090 stream detects an aircraft within a set distance of a geographic point.
 It will also send an email when the aircraft leaves that detection area.
+As well, it will send a warning email if the trajectory of the plane is likely to
+intersect the detection zone.
 
 The appearance of the records sent to stdout look like this:
 
@@ -61,17 +63,18 @@ plane_msg = {}
 metric_units = True
 #metric_units = False
 
-# 
+#
 # set desired distance and time limits
 #
-limit_distance = yourdetectionradius
+warning_distance = yourwarningradius # e.g. 200
+limit_distance = yourdetectionradius # e.g. 10
 limit_duplicate_minutes = 60
 
 #
 # set geographic location and elevation
 #
-my_lat = yourlatitude (positive = north, negative = south)
-my_lon = yourlongitude (positive = east, negative = west)
+my_lat = yourlatitude # (positive = north, negative = south)
+my_lon = yourlongitude # (positive = east, negative = west)
 my_elevation = yourantennaelevation
 
 #
@@ -88,6 +91,7 @@ timezone_hours = time.altzone/60/60
 
 #
 # define havesine great-circle-distance routine
+# credit: http://www.movable-type.co.uk/scripts/latlong.html
 #
 def haversine(origin, destination):
 	lat1, lon1 = origin
@@ -105,6 +109,20 @@ def haversine(origin, destination):
 	d = radius * c
 
 	return d
+
+#
+# define cross-track error routine
+# credit: http://www.movable-type.co.uk/scripts/latlong.html
+#
+def crosstrack(distance, angle, track):
+	if (metric_units):
+		radius = 6371 # km
+	else:
+		radius = 3959 # miles
+
+	xtd = round(abs(math.asin(math.sin(float(distance)/radius) * math.sin(radians(float(angle) - float(track)))) * radius),1)
+
+	return xtd
 
 #
 # define gmail mail sender routine
@@ -145,7 +163,7 @@ while True:
 		then = plane_dict[icao][0]
 		now = datetime.datetime.now()
 		diff_minutes = (now - then).total_seconds() / 60.
-		if (diff_minutes > limit_duplicate_minutes):
+		if (diff_minutes > alert_duplicate_minutes):
 			del plane_dict[icao]
 
 	#
@@ -155,10 +173,23 @@ while True:
 		flight = parts[10].strip()
 
 		if (icao not in plane_dict): 
-			plane_dict[icao] = [date_time_local, flight, "", "", "", "", "", "", "", "", ""]
+			plane_dict[icao] = [date_time_local, flight, "", "", "", "", "", "", "", "", "", "", ""]
 		else:
 			plane_dict[icao][0] = date_time_local
 			plane_dict[icao][1] = flight
+
+	#
+	# if type 4 record then extract speed/track
+	#
+	if (type == "4"): # this record type contains the aircraft 'flight' identifier
+		velocity = parts[12].strip()
+		track = parts[13].strip()
+
+		if (icao not in plane_dict): 
+			plane_dict[icao] = [date_time_local, "", "", "", "", "", "", "", "", "", "", track, ""]
+		else:
+			plane_dict[icao][0] = date_time_local
+			plane_dict[icao][11] = track
 
 	#
 	# if type 3 record then extract datetime/elevation/lat/lon, calculate distance/bearing/angle, and create or update dictionary
@@ -185,21 +216,20 @@ while True:
 		angle = round(angle,1)
 
 		if (icao not in plane_dict): 
-			plane_dict[icao] = [date_time_local, "", plane_lat, plane_lon, elevation, distance, bearing, angle, "", "", ""]
+			plane_dict[icao] = [date_time_local, "", plane_lat, plane_lon, elevation, distance, bearing, angle, "", "", distance, "", ""]
 		else:
 			#
 			# figure out if plane is approaching/holding/receding
 			#
-			if (distance < plane_dict[icao][5]):
+			min_distance = plane_dict[icao][10]
+
+			if (distance < min_distance):
 				plane_dict[icao][9] = "APPROACHING"
 				plane_dict[icao][10] = distance
-			elif (distance > plane_dict[icao][5]):
+			elif (distance > min_distance):
 				plane_dict[icao][9] = "RECEDING"
 			else:
 				plane_dict[icao][9] = "HOLDING"
-
-			if (plane_dict[icao][10] == ""):
-				plane_dict[icao][10] = distance
 
 			plane_dict[icao][0] = date_time_local
 			plane_dict[icao][2] = plane_lat
@@ -212,38 +242,61 @@ while True:
 	#
 	# if matched record between type 1/3 occurs, log stats to stdout and also email if entering/leaving detection zone
 	#
-	if ((type == "1" or type == "3") and (icao in plane_dict and plane_dict[icao][1] != "" and plane_dict[icao][2] != "")):
+	if ((type == "1" or type == "3" or type == "4") and (icao in plane_dict and plane_dict[icao][1] != "" and plane_dict[icao][2] != "" and plane_dict[icao][11] != "")):
+
+		flight = plane_dict[icao][1]
+		plane_lat = plane_dict[icao][2]
+		plane_lon = plane_dict[icao][3]
+		elevation = plane_dict[icao][4]
+		distance = plane_dict[icao][5]
+		bearing = plane_dict[icao][6]
+		track = plane_dict[icao][11]
+		warning = plane_dict[icao][12]
+
+		plane_log = date_time_iso + "," + icao +"," + str(flight) + "," + str(plane_lat) + "," + str(plane_lon) + "," + str(elevation) + "," + str(distance) + "," + str(bearing) + "," + str(angle) 
+		gmail_log = date_time_iso + " ICAO=" + icao + " FLIGHT=" + str(flight) + " LATITUDE=" + str(plane_lat) + "°" + " LONGITUDE=" + str(plane_lon) + "°" + " ELEVATION=" + str(elevation) + elevation_units + " DISTANCE=" + str(distance) + distance_units + " AZIMUTH=" + str(bearing) + "°" + " ALTITUDE=" + str(angle) + "°"
+		print plane_log
+
+		xtd = crosstrack(distance, (180 + bearing) % 360, track)
+		if (xtd <= 10 and distance < warning_distance and warning == ""):
+			plane_dict[icao][12] = "WARNING"
+			gmail_subject = 'Subject:WARNING: Aircraft Approaching Dectection Zone: ' + str(flight) + ' ' + str(distance) + ' ' + distance_units
+			gmail_body = gmail_log + '\n\n' + 'Predicted close encounter: ' + str(xtd) + distance_units + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight)
+			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
+
+		if (xtd > 10 and distance < warning_distance and warning == "WARNING"):
+			plane_dict[icao][12] = ""
+			gmail_subject = 'Subject:WARNING: Aircraft Diverting Dectection Zone: ' + str(flight) + ' ' + str(distance) + ' ' + distance_units
+			gmail_body = gmail_log + '\n\n' + 'Predicted close encounter: ' + str(xtd) + distance_units + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight)
+			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
+
 		if (plane_dict[icao][8] == ""):
 			plane_dict[icao][8] = "LINKED!"
-
-		plane_log = date_time_iso + "," + icao +"," + str(plane_dict[icao][1]) + "," + str(plane_dict[icao][2]) + "," + str(plane_dict[icao][3]) + "," + str(plane_dict[icao][4]) + "," + str(plane_dict[icao][5]) + "," + str(plane_dict[icao][6]) + "," + str(plane_dict[icao][7])
-		gmail_log = date_time_iso + " ICAO=" + icao + " FLIGHT=" + str(plane_dict[icao][1]) + " LATITUDE=" + str(plane_dict[icao][2]) + "°" + " LONGITUDE=" + str(plane_dict[icao][3]) + "°" + " ELEVATION=" + str(plane_dict[icao][4]) + elevation_units + " DISTANCE=" + str(plane_dict[icao][5]) + distance_units + " AZIMUTH=" + str(plane_dict[icao][6]) + "°" + " ALTITUDE=" + str(plane_dict[icao][7]) + "°"
-		print plane_log
 
 		#
 		# if plane enters detection zone, send email and begin history capture
 		#
-		if (plane_dict[icao][5] <= limit_distance and plane_dict[icao][8] != "ENTERING"):
+		if (plane_dict[icao][5] <= alert_distance and plane_dict[icao][8] != "ENTERING"):
 			plane_dict[icao][8] = "ENTERING"
 			plane_hist[icao] = [plane_log.split(",")]
-			gmail_subject = 'Subject:ALERT: Aircraft Entering Dectection Zone: ' + str(plane_dict[icao][1]) + ' ' + str(plane_dict[icao][5])  + ' ' + distance_units
-			gmail_body = gmail_log + '\n\n' + 'http://flightaware.com/live/flight/' + str(plane_dict[icao][1])
+			gmail_subject = 'Subject:ALERT: Aircraft Entering Dectection Zone: ' + str(flight) + ' ' + str(distance) + ' ' + distance_units
+			gmail_body = gmail_log + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight)
 			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
 
 		#
 		# if plane still within detection zone, add to history capture
 		#
-		if (plane_dict[icao][5] <= limit_distance and plane_dict[icao][8] == "ENTERING"):
+		if (plane_dict[icao][5] <= alert_distance and plane_dict[icao][8] == "ENTERING"):
 			plane_hist[icao].append(plane_log.split(","))
 
 		#
 		# if plane leaves detection zone, generate email and include history capture
 		#
-		if (plane_dict[icao][5] > limit_distance and plane_dict[icao][8] == "ENTERING"):
+		if (plane_dict[icao][5] > alert_distance and plane_dict[icao][8] == "ENTERING"):
 			plane_dict[icao][8] = "LEAVING"
 
-			gmail_subject = 'Subject:ALERT: Aircraft Leaving Dectection Zone: ' + str(plane_dict[icao][1]) + ' ' + str(plane_dict[icao][5])  + ' ' + distance_units
-			gmail_body = gmail_log + '\n\n' + 'http://flightaware.com/live/flight/' + str(plane_dict[icao][1]) + '\n\n'
+			gmail_subject = 'Subject:ALERT: Aircraft Leaving Dectection Zone: ' + str(flight) + ' ' + str(distance)  + ' ' + distance_units
+			gmail_body = gmail_log + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight) + '\n\n'
 
 			#
 			# mark plane history record(s) of closest approach
@@ -254,5 +307,5 @@ while True:
 				else:
 					gmail_body = gmail_body + ','.join(hist_entry) + '\n'
 			del plane_hist[icao]
-			gmail_body = gmail_body + '\nClosest approach: ' + str(plane_dict[icao][10]) + distance_units
+			gmail_body = gmail_body + '\nClosest encounter: ' + str(plane_dict[icao][10]) + distance_units
 			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
