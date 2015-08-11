@@ -3,7 +3,7 @@
 
 """
 flight_warning.py
-version 1.05
+version 1.06
 
 This program will send a Google mail message when an ADS-B data feed from
 a dump1090 stream detects an aircraft within a set distance of a geographic point.
@@ -17,7 +17,7 @@ The appearance of the records sent to stdout look like this:
 
 The format is as follows:
 
-datetime,icao_code,flight_code,latitude,longitude,elevation,distance,azimuth_bearing,altitude_angle
+datetime,icao_code,flight_code,latitude,longitude,elevation,distance,azimuth,altitude
 
 The units of elevation and distance depend on settings within the code below (i.e. meters/kilometers
 or feet/miles).
@@ -114,13 +114,13 @@ def haversine(origin, destination):
 # define cross-track error routine
 # credit: http://www.movable-type.co.uk/scripts/latlong.html
 #
-def crosstrack(distance, angle, track):
+def crosstrack(distance, azimuth, track):
 	if (metric_units):
 		radius = 6371 # km
 	else:
 		radius = 3959 # miles
 
-	xtd = round(abs(math.asin(math.sin(float(distance)/radius) * math.sin(radians(float(angle) - float(track)))) * radius),1)
+	xtd = round(abs(math.asin(math.sin(float(distance)/radius) * math.sin(radians(float(azimuth) - float(track)))) * radius),1)
 
 	return xtd
 
@@ -192,7 +192,7 @@ while True:
 			plane_dict[icao][11] = track
 
 	#
-	# if type 3 record then extract datetime/elevation/lat/lon, calculate distance/bearing/angle, and create or update dictionary
+	# if type 3 record then extract datetime/elevation/lat/lon, calculate distance/azimuth/altitude, and create or update dictionary
 	#
 	if (type == "3"): # this record type contains the aircraft 'ICAO' identifier, lat/lon, and elevation
 		elevation = float(parts[11]) # assumes dump1090 is outputting elevation in feet 
@@ -207,16 +207,16 @@ while True:
 		plane_lon = float(parts[15])
 
 		distance = round(haversine((my_lat, my_lon), (plane_lat, plane_lon)),1)
-		bearing = atan2(sin(radians(plane_lon-my_lon))*cos(radians(plane_lat)), cos(radians(my_lat))*sin(radians(plane_lat))-sin(radians(my_lat))*cos(radians(plane_lat))*cos(radians(plane_lon-my_lon)))
-		bearing = round(((degrees(bearing) + 360) % 360),1)
+		azimuth = atan2(sin(radians(plane_lon-my_lon))*cos(radians(plane_lat)), cos(radians(my_lat))*sin(radians(plane_lat))-sin(radians(my_lat))*cos(radians(plane_lat))*cos(radians(plane_lon-my_lon)))
+		azimuth = round(((degrees(azimuth) + 360) % 360),1)
 
-		angle = degrees(atan((elevation - my_elevation)/(distance*1000))) # distance converted from kilometers to meters to match elevation
+		altitude = degrees(atan((elevation - my_elevation)/(distance*1000))) # distance converted from kilometers to meters to match elevation
 		if (not metric_units):
-			angle = degrees(atan((elevation - my_elevation)/(distance*5280))) # distance converted from miles to feet to match elevation
-		angle = round(angle,1)
+			altitude = degrees(atan((elevation - my_elevation)/(distance*5280))) # distance converted from miles to feet to match elevation
+		altitude = round(altitude,1)
 
 		if (icao not in plane_dict): 
-			plane_dict[icao] = [date_time_local, "", plane_lat, plane_lon, elevation, distance, bearing, angle, "", "", distance, "", ""]
+			plane_dict[icao] = [date_time_local, "", plane_lat, plane_lon, elevation, distance, azimuth, altitude, "", "", distance, "", ""]
 		else:
 			#
 			# figure out if plane is approaching/holding/receding
@@ -236,8 +236,8 @@ while True:
 			plane_dict[icao][3] = plane_lon
 			plane_dict[icao][4] = elevation 
 			plane_dict[icao][5] = distance 
-			plane_dict[icao][6] = bearing 
-			plane_dict[icao][7] = angle 
+			plane_dict[icao][6] = azimuth 
+			plane_dict[icao][7] = altitude 
 
 	#
 	# if matched record between type 1/3 occurs, log stats to stdout and also email if entering/leaving detection zone
@@ -249,25 +249,31 @@ while True:
 		plane_lon = plane_dict[icao][3]
 		elevation = plane_dict[icao][4]
 		distance = plane_dict[icao][5]
-		bearing = plane_dict[icao][6]
+		azimuth = plane_dict[icao][6]
+		altitude = plane_dict[icao][7]
 		track = plane_dict[icao][11]
 		warning = plane_dict[icao][12]
+		direction = plane_dict[icao][9]
 
-		plane_log = date_time_iso + "," + icao +"," + str(flight) + "," + str(plane_lat) + "," + str(plane_lon) + "," + str(elevation) + "," + str(distance) + "," + str(bearing) + "," + str(angle) 
-		gmail_log = date_time_iso + " ICAO=" + icao + " FLIGHT=" + str(flight) + " LATITUDE=" + str(plane_lat) + "°" + " LONGITUDE=" + str(plane_lon) + "°" + " ELEVATION=" + str(elevation) + elevation_units + " DISTANCE=" + str(distance) + distance_units + " AZIMUTH=" + str(bearing) + "°" + " ALTITUDE=" + str(angle) + "°"
+		plane_log = date_time_iso + "," + icao +"," + str(flight) + "," + str(plane_lat) + "," + str(plane_lon) + "," + str(elevation) + "," + str(distance) + "," + str(azimuth) + "," + str(altitude) 
+		gmail_log = date_time_iso + " ICAO=" + icao + " FLIGHT=" + str(flight) + " LATITUDE=" + str(plane_lat) + "°" + " LONGITUDE=" + str(plane_lon) + "°" + " ELEVATION=" + str(elevation) + elevation_units + " DISTANCE=" + str(distance) + distance_units + " AZIMUTH=" + str(azimuth) + "°" + " ALTITUDE=" + str(altitude) + "°"
 		print plane_log
 
-		xtd = crosstrack(distance, (180 + bearing) % 360, track)
-		if (xtd <= 10 and distance < warning_distance and warning == ""):
+		xtd = crosstrack(distance, (180 + azimuth) % 360, track)
+		if (xtd <= 10 and distance < warning_distance and warning == "" and direction != "RECEDING"):
 			plane_dict[icao][12] = "WARNING"
 			gmail_subject = 'Subject:WARNING: Aircraft Approaching Dectection Zone: ' + str(flight) + ' ' + str(distance) + ' ' + distance_units
 			gmail_body = gmail_log + '\n\n' + 'Predicted close encounter: ' + str(xtd) + distance_units + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight)
+			gmail_body = gmail_body + '\n\n' + 'https://planefinder.net/flight/' + str(flight)
+			gmail_body = gmail_body + '\n\n' + 'http://www.flightradar24.com/' + str(flight)
 			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
 
-		if (xtd > 10 and distance < warning_distance and warning == "WARNING"):
+		if (xtd > 10 and distance < warning_distance and warning == "WARNING" and direction != "RECEDING"):
 			plane_dict[icao][12] = ""
 			gmail_subject = 'Subject:WARNING: Aircraft Diverting Dectection Zone: ' + str(flight) + ' ' + str(distance) + ' ' + distance_units
 			gmail_body = gmail_log + '\n\n' + 'Predicted close encounter: ' + str(xtd) + distance_units + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight)
+			gmail_body = gmail_body + '\n\n' + 'https://planefinder.net/flight/' + str(flight)
+			gmail_body = gmail_body + '\n\n' + 'http://www.flightradar24.com/' + str(flight)
 			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
 
 		if (plane_dict[icao][8] == ""):
@@ -281,6 +287,8 @@ while True:
 			plane_hist[icao] = [plane_log.split(",")]
 			gmail_subject = 'Subject:ALERT: Aircraft Entering Dectection Zone: ' + str(flight) + ' ' + str(distance) + ' ' + distance_units
 			gmail_body = gmail_log + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight)
+			gmail_body = gmail_body + '\n\n' + 'https://planefinder.net/flight/' + str(flight)
+			gmail_body = gmail_body + '\n\n' + 'http://www.flightradar24.com/' + str(flight)
 			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
 
 		#
