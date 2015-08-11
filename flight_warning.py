@@ -305,6 +305,8 @@ while True:
 
 			gmail_subject = 'Subject:ALERT: Aircraft Leaving Dectection Zone: ' + str(flight) + ' ' + str(distance)  + ' ' + distance_units
 			gmail_body = gmail_log + '\n\n' + 'http://flightaware.com/live/flight/' + str(flight) + '\n\n'
+			gmail_body = gmail_body + '\n\n' + 'https://planefinder.net/flight/' + str(flight)
+			gmail_body = gmail_body + '\n\n' + 'http://www.flightradar24.com/' + str(flight)
 
 			#
 			# mark plane history record(s) of closest approach
