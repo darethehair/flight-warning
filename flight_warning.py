@@ -3,7 +3,7 @@
 
 """
 flight_warning.py
-version 1.06
+version 1.07
 
 This program will send a Google mail message when an ADS-B data feed from
 a dump1090 stream detects an aircraft within a set distance of a geographic point.
@@ -22,7 +22,7 @@ datetime,icao_code,flight_code,latitude,longitude,elevation,distance,azimuth,alt
 The units of elevation and distance depend on settings within the code below (i.e. meters/kilometers
 or feet/miles).
 
-Copyright (C) 2015 Darren Enns <darethehair@gmail.com>
+Copyright (C) 2015-2019 Darren Enns <darethehair@gmail.com>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -67,22 +67,22 @@ metric_units = True
 # set desired distance and time limits
 #
 warning_distance = yourwarningradius # e.g. 200
-limit_distance = yourdetectionradius # e.g. 10
-limit_duplicate_minutes = 60
+alert_distance = yourdetectionradius # e.g. 10
+alert_duplicate_minutes = 60
 
 #
 # set geographic location and elevation
 #
 my_lat = yourlatitude # (positive = north, negative = south)
 my_lon = yourlongitude # (positive = east, negative = west)
-my_elevation = yourantennaelevation
+my_elevation = yourelevation # (feet for imperial, meters for metric)
 
 #
 # set gmail userids and creditials
 #
-gmail_recv_user = 'yourreceiveruserid@gmail.com'
-gmail_send_user = 'yoursenderuserid@gmail.com'
-gmail_pwd = 'yourgmailpassword';
+gmail_recv_user = 'yourreceivinguserid@gmail.com'
+gmail_send_user = 'yoursendinguserid@gmail.com'
+gmail_pwd = 'yoursendinggmailpassword';
 
 #
 # calculate time zone for ISO date/timestamp
@@ -203,47 +203,56 @@ while True:
 			elevation_units = "m"
 			distance_units = "km"
 
-		plane_lat = float(parts[14])
-		plane_lon = float(parts[15])
+                try:
+                        plane_lat = float(parts[14])
 
-		distance = round(haversine((my_lat, my_lon), (plane_lat, plane_lon)),1)
-		azimuth = atan2(sin(radians(plane_lon-my_lon))*cos(radians(plane_lat)), cos(radians(my_lat))*sin(radians(plane_lat))-sin(radians(my_lat))*cos(radians(plane_lat))*cos(radians(plane_lon-my_lon)))
-		azimuth = round(((degrees(azimuth) + 360) % 360),1)
+                except:
+                        pass
 
-		altitude = degrees(atan((elevation - my_elevation)/(distance*1000))) # distance converted from kilometers to meters to match elevation
-		if (not metric_units):
-			altitude = degrees(atan((elevation - my_elevation)/(distance*5280))) # distance converted from miles to feet to match elevation
-		altitude = round(altitude,1)
+                try:
+                        plane_lon = float(parts[15])
 
-		if (icao not in plane_dict): 
-			plane_dict[icao] = [date_time_local, "", plane_lat, plane_lon, elevation, distance, azimuth, altitude, "", "", distance, "", ""]
-		else:
-			#
-			# figure out if plane is approaching/holding/receding
-			#
-			min_distance = plane_dict[icao][10]
+                except:
+                        pass
 
-			if (distance < min_distance):
-				plane_dict[icao][9] = "APPROACHING"
-				plane_dict[icao][10] = distance
-			elif (distance > min_distance):
-				plane_dict[icao][9] = "RECEDING"
-			else:
-				plane_dict[icao][9] = "HOLDING"
+                else:
+                        distance = round(haversine((my_lat, my_lon), (plane_lat, plane_lon)),1)
+                        azimuth = atan2(sin(radians(plane_lon-my_lon))*cos(radians(plane_lat)), cos(radians(my_lat))*sin(radians(plane_lat))-sin(radians(my_lat))*cos(radians(plane_lat))*cos(radians(plane_lon-my_lon)))
+                        azimuth = round(((degrees(azimuth) + 360) % 360),1)
 
-			plane_dict[icao][0] = date_time_local
-			plane_dict[icao][2] = plane_lat
-			plane_dict[icao][3] = plane_lon
-			plane_dict[icao][4] = elevation 
-			plane_dict[icao][5] = distance 
-			plane_dict[icao][6] = azimuth 
-			plane_dict[icao][7] = altitude 
+                        altitude = degrees(atan((elevation - my_elevation)/(distance*1000))) # distance converted from kilometers to meters to match elevation
+                        if (not metric_units):
+                                altitude = degrees(atan((elevation - my_elevation)/(distance*5280))) # distance converted from miles to feet to match elevation
+                        altitude = round(altitude,1)
+
+                        if (icao not in plane_dict): 
+                                plane_dict[icao] = [date_time_local, "", plane_lat, plane_lon, elevation, distance, azimuth, altitude, "", "", distance, "", ""]
+                        else:
+                                #
+                                # figure out if plane is approaching/holding/receding
+                                #
+                                min_distance = plane_dict[icao][10]
+
+                                if (distance < min_distance):
+                                        plane_dict[icao][9] = "APPROACHING"
+                                        plane_dict[icao][10] = distance
+                                elif (distance > min_distance):
+                                        plane_dict[icao][9] = "RECEDING"
+                                else:
+                                        plane_dict[icao][9] = "HOLDING"
+
+                                plane_dict[icao][0] = date_time_local
+                                plane_dict[icao][2] = plane_lat
+                                plane_dict[icao][3] = plane_lon
+                                plane_dict[icao][4] = elevation 
+                                plane_dict[icao][5] = distance 
+                                plane_dict[icao][6] = azimuth 
+                                plane_dict[icao][7] = altitude 
 
 	#
 	# if matched record between type 1/3 occurs, log stats to stdout and also email if entering/leaving detection zone
 	#
 	if ((type == "1" or type == "3" or type == "4") and (icao in plane_dict and plane_dict[icao][1] != "" and plane_dict[icao][2] != "" and plane_dict[icao][11] != "")):
-
 		flight = plane_dict[icao][1]
 		plane_lat = plane_dict[icao][2]
 		plane_lon = plane_dict[icao][3]
@@ -319,3 +328,4 @@ while True:
 			del plane_hist[icao]
 			gmail_body = gmail_body + '\nClosest encounter: ' + str(plane_dict[icao][10]) + distance_units
 			send_gmail(gmail_send_user, gmail_recv_user, gmail_pwd, gmail_subject, gmail_body)
+
